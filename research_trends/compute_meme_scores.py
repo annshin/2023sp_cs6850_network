@@ -8,6 +8,8 @@ from datetime import date
 import numpy as np
 from time import time
 
+from combine_meme_files import get_combined_metadata
+
 SCRATCH_PATH = '/scratch/datasets/aw588/'
 UNARXIVE_PATH = SCRATCH_PATH + "unarXive"
 CACHE_PATH = '/scratch/datasets/mog29/unarXive'
@@ -18,18 +20,39 @@ METHOD_SUBSTRINGS = ['method', 'model', 'approach']
 IDF_THRESHOLD = 1.6
 
 
-def compute_overall_frequencies(year_to_frequencies, paper_to_metadata):
+def compute_overall_frequencies(year_to_frequencies, paper_to_metadata, disciplines):
+    max_year = max(list(year_to_frequencies.keys()))
+
     for paper, metadata in tqdm(paper_to_metadata.items()):
         categories = metadata['categories']
-        found_match = any([cat in VALID_DISCIPLINES for cat in categories])
+        found_match = any([cat in disciplines for cat in categories])
         if not found_match:
             continue
 
         year = int(metadata['release_date'][-1])
-        for curr_year in range(year, 2023): 
+        for curr_year in range(year, max_year + 1): 
             year_to_frequencies[curr_year]['num_papers'] += 1
-            weighted_freq = (year - 1991 + 1) / (curr_year - 1991 + 1)
-            year_to_frequencies[curr_year]['weighted_num_papers'] += weighted_freq
+
+def get_combined_n_grams(years):
+    new_years = [str(year)[2:] for year in years]
+
+    # Iterate over all years
+    all_paper_ids = set()
+    meme_to_articles = {}
+    for year in tqdm(new_years):
+        year_meme_path = os.path.join(CACHE_PATH, f'n_gram_to_papers_{year}.pkl')
+        with open(year_meme_path, 'rb') as f:
+            year_memes = pickle.load(f)
+
+        for meme, containing_docs in year_memes.items():
+            if meme not in meme_to_articles:
+                meme_to_articles[meme] = set()
+            for containing_doc in containing_docs:
+                meme_to_articles[meme].add(containing_doc)
+                all_paper_ids.add(containing_doc)
+
+    return meme_to_articles
+
 
 def is_meme_in_paper(paper, meme, meme_to_articles):
     if meme not in meme_to_articles:
@@ -42,132 +65,116 @@ def is_meme_in_citations(citations, meme, meme_to_articles):
         truth_vals.append(is_meme_in_paper(paper, meme, meme_to_articles))
     return any(truth_vals)
 
-def compute_n_gram_meme_score_terms(meme_to_score_components, meme_to_articles, paper_to_metadata, meme_to_idf):
-    for meme, papers_appearing_in in tqdm(meme_to_articles.items()):
-        meme_idf = meme_to_idf[meme]
-        if meme_idf < IDF_THRESHOLD:
+def compute_n_gram_meme_score_terms(year, meme_to_articles, common_memes, meme_to_score_components,
+                                    paper_to_metadata, disciplines):
+    for paper, metadata in tqdm(paper_to_metadata.items()):
+        # Skip paper if out of discipline
+        categories = metadata['categories']
+        found_match = any([cat in disciplines for cat in categories])
+        if not found_match:
             continue
 
-        for paper in papers_appearing_in:
-            # Choose whether to skip the current appearance of the meme
-            metadata = paper_to_metadata[paper]
-            categories = metadata['categories']
-            found_match = any([cat in VALID_DISCIPLINES for cat in categories])
-            if not found_match:
-                continue
-            if meme not in meme_to_score_components:
-                meme_to_score_components[meme] = {}
+        # Skip paper if published after year
+        paper_year = int(metadata["release_date"][-1])
+        if paper_year > year:
+            continue
+        citations = metadata['cited_papers']
 
-            # Extract other paper info
-            paper_year = int(metadata["release_date"][-1])
-            citations = metadata['cited_papers']
+        # Iterate over each meme
+        for meme in common_memes:
+            meme_in_paper = is_meme_in_paper(paper, meme, meme_to_articles)
+            meme_in_citations = is_meme_in_citations(citations, meme, meme_to_articles)            
 
-            # Get info for meme score
-            meme_in_citations = is_meme_in_citations(citations, meme, meme_to_articles)
-
-            for curr_year in range(paper_year, 2023):
-                if curr_year not in meme_to_score_components[meme]:
-                    meme_to_score_components[meme][curr_year] = {
-                        'frequency' : 0,
-                        'weighted_frequency' : 0,
-                        'in_paper_in_citations' : 0,
-                        'in_citations' : 0,
-                        'in_paper_not_in_citations' : 0,
-                        'not_in_citations' : 0,
-                        'weighted_in_paper_in_citations' : 0,
-                        'weighted_in_citations' : 0,
-                        'weighted_in_paper_not_in_citations' : 0,
-                        'weighted_not_in_citations' : 0
-                    }
-
-                year_weight = (paper_year - 1991 + 1) / (curr_year - 1991 + 1)
-                meme_to_score_components[meme][curr_year]['frequency'] += 1
-                meme_to_score_components[meme][curr_year]['weighted_frequency'] += year_weight
+            if meme_in_paper:
+                meme_to_score_components[meme]['frequency'] += 1
                 if meme_in_citations:
-                    meme_to_score_components[meme][curr_year]['in_paper_in_citations'] += 1
-                    meme_to_score_components[meme][curr_year]['weighted_in_paper_in_citations'] += year_weight
-                    meme_to_score_components[meme][curr_year]['in_citations'] += 1
-                    meme_to_score_components[meme][curr_year]['weighted_in_citations'] += year_weight
+                    meme_to_score_components[meme]['in_paper_in_citations'] += 1
+                    meme_to_score_components[meme]['in_citations'] += 1
                 else:
-                    meme_to_score_components[meme][curr_year]['in_paper_not_in_citations'] += 1
-                    meme_to_score_components[meme][curr_year]['weighted_in_paper_not_in_citations'] += year_weight
-                    meme_to_score_components[meme][curr_year]['not_in_citations'] += 1
-                    meme_to_score_components[meme][curr_year]['weighted_not_in_citations'] += year_weight
+                    meme_to_score_components[meme]['in_paper_not_in_citations'] += 1
+                    meme_to_score_components[meme]['not_in_citations'] += 1
+            else:
+                if meme_in_citations:
+                    meme_to_score_components[meme]['in_citations'] += 1
+                else:
+                    meme_to_score_components[meme]['not_in_citations'] += 1                    
                             
-def save_annual_meme_scores(year_to_frequencies, meme_to_score_components):
-    meme_to_year_scores = {}
-    for meme, meme_year_dict in tqdm(meme_to_score_components.items()):
-        meme_to_year_scores[meme] = {}
-        for curr_year, year_info in meme_year_dict.items():
-            # Compute the frequency scores
-            total_frequency = year_to_frequencies[curr_year]['num_papers']
-            meme_frequency = year_info['frequency']
-            frequency_score = meme_frequency / total_frequency
-            weighted_total_frequency = year_to_frequencies[curr_year]['weighted_num_papers']
-            weighted_meme_frequency = year_info['weighted_frequency']
-            weighted_frequency_score = weighted_meme_frequency / weighted_total_frequency
+def save_year_discipline_meme_scores(year_to_frequencies, meme_to_score_components, year, discipline_suffix):
+    meme_to_scores = {}
+    for meme, score_components in meme_to_score_components.items():
+        # Compute the frequency score
+        total_frequency = year_to_frequencies[year]['num_papers']
+        meme_frequency = score_components['frequency']
+        frequency_score = meme_frequency / (total_frequency + 1e-8)
 
-            # Compute sticking scores
-            in_paper_in_citations = year_info['in_paper_in_citations']
-            in_citations = year_info['in_citations']
-            sticking_score = in_paper_in_citations / (1 + in_citations)
-            weighted_in_paper_in_citations = year_info['weighted_in_paper_in_citations']
-            weighted_in_citations = year_info['weighted_in_citations']
-            weighted_sticking_score = weighted_in_paper_in_citations / (1 + weighted_in_citations)
+        # Compute sticking scores
+        in_paper_in_citations = score_components['in_paper_in_citations']
+        in_citations = score_components['in_citations']
+        sticking_score = in_paper_in_citations / (3 + in_citations)
+        
+        # Compute sparking scores
+        in_paper_not_in_citations = score_components['in_paper_not_in_citations']
+        not_in_citations = score_components['not_in_citations']
+        sparking_score = (3+in_paper_not_in_citations) / (3 + not_in_citations)
 
-            # Compute sparking scores
-            in_paper_not_in_citations = year_info['in_paper_not_in_citations']
-            not_in_citations = year_info['not_in_citations']
-            sparking_score = in_paper_not_in_citations / (1 + not_in_citations)
-            weighted_in_paper_not_in_citations = year_info['weighted_in_paper_not_in_citations']
-            weighted_not_in_citations = year_info['weighted_not_in_citations']
-            weighted_sparking_score = weighted_in_paper_not_in_citations / (1 + weighted_not_in_citations)
+        # Compute meme scores
+        meme_score = frequency_score * sticking_score / sparking_score
+        meme_to_scores[meme] = {"meme_score" : meme_score}
 
-            # Compute meme scores
-            meme_score = frequency_score * sticking_score / sparking_score
-            weighted_meme_score = weighted_frequency_score * weighted_sticking_score / weighted_sparking_score
-            meme_to_year_scores[meme][curr_year] = {
-                "meme_score" : meme_score,
-                "weighted_meme_score" : weighted_meme_score
-            }
-
-    meme_score_path = os.path.join(CACHE_PATH, 'meme_scores.pkl')
+    meme_score_path = os.path.join(CACHE_PATH, f'year_{year}_meme_scores_{discipline_suffix}.pkl')
     with open(meme_score_path, 'wb') as f:
-        pickle.dump(meme_to_year_scores, f)
+        pickle.dump(meme_to_scores, f)        
 
 if __name__ == "__main__":
     years = [i for i in range(1991, 2023)]
-    year_to_frequencies = {year : {'num_papers' : 0, 'weighted_num_papers' : 0} for year in years}
-    meme_to_score_components = {}
 
-    # Load meme to idf
-    start_time = time()
-    idf_path = os.path.join(CACHE_PATH, 'meme_idf.pkl')
-    with open(idf_path, 'rb') as f:
-        meme_to_idf = pickle.load(f)
-    end_time = time()
-    print(f'Loading meme to idf took {end_time - start_time} seconds')
-
-    # Load meme to papers
-    start_time = time()
-    meme_to_articles_path = os.path.join(CACHE_PATH, 'n_gram_to_papers.pkl')
-    with open(meme_to_articles_path, 'rb') as f:
-        meme_to_articles = pickle.load(f)
-    end_time = time()
-    print(f'Loading meme to articles took {end_time - start_time} seconds')
-
-    start_time = time()
-    paper_to_metadata_path = os.path.join(CACHE_PATH, 'paper_to_metadata.pkl')
-    with open(paper_to_metadata_path, 'rb') as f:
-        paper_to_metadata = pickle.load(f)
-    end_time = time()
-    print(f'Loading paper to metadata took {end_time - start_time} seconds')
+    paper_to_metadata = get_combined_metadata()
+    meme_to_articles = get_combined_n_grams(years)
 
     # Compute the total number of publications per year
-    compute_overall_frequencies(year_to_frequencies, paper_to_metadata)
+    all_disciplines = [
+        VALID_DISCIPLINES,
+        ['astro-ph.CO', 'astro-ph.EP', 'astro-ph.GA', 'astro-ph.HE', 'astro-ph.IM', 'astro-ph.SR'],
+        ['cond-mat.dis-nn', 'cond-mat.mes-hall', 'cond-mat.mtrl-sci', 'cond-mat.other',
+         'cond-mat.quant-gas', 'cond-mat.soft', 'cond-mat.stat-mech', 'cond-mat.str-el',
+         'cond-mat.supr-con'],
+        ['hep-ex', 'hep-lat', 'hep-ph', 'hep-th'],
+        ['nlin.AO', 'nlin.CD', 'nlin.CG', 'nlin.PS', 'nlin.SI'],
+        ['nucl-ex', 'nucl-th']]
+    discipline_suffixes = [
+        'ai',
+        'astrophysics',
+        'condensed_matter',
+        'high_energy',
+        'nonlinear',
+        'nuclear']
 
-    # Compute the n_gram specific components of the meme score
-    compute_n_gram_meme_score_terms(meme_to_score_components, meme_to_articles, paper_to_metadata)
+    # Iterate over each year/discipline pair
+    for i in range(len(all_disciplines)):
+        discipline = all_disciplines[i]
+        discipline_suffix = discipline_suffixes[i]
+        print(discipline, discipline_suffix)
 
-    # Compute meme scores
-    save_annual_meme_scores(year_to_frequencies, meme_to_score_components)
+        year_to_frequencies = {year : {'num_papers' : 0} for year in years}        
+        compute_overall_frequencies(year_to_frequencies, paper_to_metadata, discipline)
+
+        for year in years:
+            print(year)
+
+            # Load most common memes for that pairing
+            common_meme_savepath = os.path.join(CACHE_PATH, f'year_{year}_most_common_{discipline_suffix}.pkl')
+            with open(common_meme_savepath, 'rb') as f:
+                common_memes = pickle.load(f)[:2500]
+
+            meme_to_score_components = {meme : {
+                'frequency' : 0,
+                'in_paper_in_citations' : 0,
+                'in_citations' : 0,
+                'in_paper_not_in_citations' : 0,
+                'not_in_citations' : 0
+            } for meme in common_memes}
+            compute_n_gram_meme_score_terms(year, meme_to_articles, common_memes, meme_to_score_components,
+                                            paper_to_metadata, discipline)
+            save_year_discipline_meme_scores(year_to_frequencies, meme_to_score_components, year, discipline_suffix)
+            
+
