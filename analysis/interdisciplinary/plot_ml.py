@@ -1,6 +1,8 @@
 import plotly.graph_objects as go
 import pandas as pd
 from copy import deepcopy
+import matplotlib
+default_colors = matplotlib.rcParams['axes.prop_cycle'].by_key()['color']
 
 
 def plot_interdisciplinary_combinations_v2(data_df, year, discipline_lower):
@@ -26,9 +28,11 @@ def plot_interdisciplinary_combinations_v2(data_df, year, discipline_lower):
 
     # Define the color mapping for disciplines
     color_mapping = {
-        'Computer Science': 'blue',
+        'Computer Science': default_colors[0],  # Blue
+        'Economics': default_colors[1],  # Orange
+        'Mathematics': default_colors[2],  # Green
+        'Physics': default_colors[3],  # Red
         'Statistics': 'green',
-        'Physics': 'rgba(31,119,180,1)',
         'Materials Science': 'rgba(255,127,14,1)',
         'Philosphy': 'rgba(44,160,44,1)',
         'Chemistry': 'rgba(214,39,40,1)',
@@ -40,9 +44,7 @@ def plot_interdisciplinary_combinations_v2(data_df, year, discipline_lower):
         'Geography': 'rgba(23,190,207,1)',
         'Medicine': 'rgba(166,77,121,1)',
         'Engineering': 'rgba(84,153,199,1)',
-        'Mathematics': 'rgba(241,90,96,1)',
         'Psychology': 'rgba(254,219,64,1)',
-        'Economics': 'rgba(244,109,67,1)',
         'Political Science': 'rgba(171,104,87,1)',
         'Sociology': 'rgba(106,183,153,1)',
         'Business': 'rgba(120,198,121,1)',
@@ -80,6 +82,11 @@ def plot_interdisciplinary_combinations_v2(data_df, year, discipline_lower):
         )
     )])
 
+    if year.startswith("9"):
+        year = f"19{year}"
+    else:
+        year = f"20{year}"
+
     fig.update_layout(title_text=f'Year: {year}', font_size=10)
 
     # Save the figure to png
@@ -100,6 +107,7 @@ if __name__ == '__main__':
                   '21', '22']
     # discipline = "Physics"
     # discipline = "Mathematics"
+    # discipline = "Economics"
     # discipline_lower = discipline.lower()
 
     for year in full_year_range:
